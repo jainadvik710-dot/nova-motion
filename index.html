@@ -1,8 +1,8 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#080b12" />
   <title>Nova Motion — AI video generator</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -12,22 +12,22 @@
 </head>
 <body>
   <div class="app-shell">
-    <header class="topbar"><a class="brand" href="#"><span class="brand-mark">✦</span><span>nova<span class="brand-muted">motion</span></span></a><div class="topbar-right"><span class="credits"><i></i> 24 credits</span><button class="avatar">AJ</button></div></header>
+    <header class="topbar"><a class="brand" href="/"><span class="brand-mark">✦</span><span>nova<span class="brand-muted">motion</span></span></a><span class="provider-badge">OPEN MODEL · HUGGING FACE</span></header>
     <main class="workspace">
-      <section class="intro"><div class="eyebrow"><span class="eyebrow-line"></span> AI VIDEO STUDIO</div><h1>Turn your ideas<br><em>into motion.</em></h1><p>Describe a scene, add a starting image, and let Nova create a cinematic video for you.</p></section>
+      <section class="intro"><div class="eyebrow"><span class="eyebrow-line"></span> AI VIDEO STUDIO</div><h1>Turn your ideas<br><em>into motion.</em></h1><p>Describe a scene and generate a real video with an open model. Free hardware may be queued, sleeping, or unavailable.</p></section>
       <section class="generator-grid">
         <form class="control-panel" id="generatorForm">
           <div class="section-heading"><span class="step">01</span><div><h2>Describe your video</h2><p>Be vivid. Add camera movement, mood, and style.</p></div></div>
-          <label class="prompt-wrap" for="prompt"><textarea id="prompt" maxlength="500" rows="4" placeholder="A cinematic sunset over the mountains..." required></textarea><span class="prompt-count"><b id="promptCount">0</b> / 500</span></label>
-          <div class="section-heading compact"><span class="step">02</span><div><h2>Starting image <small>OPTIONAL</small></h2><p>Give your video a visual anchor.</p></div></div>
-          <label class="upload-box" id="uploadBox" for="imageInput"><input id="imageInput" type="file" accept="image/png,image/jpeg,image/webp" /><div class="upload-icon">＋</div><div><strong id="uploadTitle">Upload an image</strong><span id="uploadHint">PNG, JPG or WEBP · up to 10MB</span></div><img id="imageThumb" alt="Selected starting image" /></label>
-          <div class="section-heading compact"><span class="step">03</span><div><h2>Shape your output</h2><p>Choose a format for where you'll share it.</p></div></div>
-          <div class="option-row"><div class="option-group"><span class="option-label">Duration</span><div class="segmented"><button type="button" class="option active" data-group="duration" data-value="5">5 sec</button><button type="button" class="option" data-group="duration" data-value="10">10 sec</button></div></div><div class="option-group"><span class="option-label">Aspect ratio</span><div class="segmented"><button type="button" class="option active" data-group="ratio" data-value="16:9">16:9</button><button type="button" class="option" data-group="ratio" data-value="9:16">9:16</button><button type="button" class="option" data-group="ratio" data-value="1:1">1:1</button></div></div></div>
-          <button class="generate-btn" type="submit"><span class="spark">✦</span> Generate video <span class="arrow">↗</span></button><p class="fine-print">One generation uses <strong>2 credits</strong> · API connection required</p>
+          <label class="prompt-wrap" for="prompt"><textarea id="prompt" maxlength="500" rows="5" placeholder="A cinematic sunrise over the mountains..." required></textarea><span class="prompt-count"><span id="promptCount">0</span>/500</span></label>
+          <div class="section-heading compact"><span class="step">02</span><div><h2>Starting image <small>NOT AVAILABLE</small></h2><p>The selected free model currently supports text-to-video only.</p></div></div>
+          <div class="upload-box disabled" aria-disabled="true"><div class="upload-icon">＋</div><div><strong>Image-to-video unavailable</strong><span>Choose a text prompt instead</span></div></div>
+          <div class="section-heading compact"><span class="step">03</span><div><h2>Output</h2><p>Generation settings are constrained by the free Space.</p></div></div>
+          <div class="output-note"><strong>Text-to-video</strong><span>Real output only · shared free GPU · may take several minutes</span></div>
+          <button class="generate-btn" id="generateButton" type="submit"><span class="spark">✦</span> Generate video <span class="arrow">↗</span></button>
         </form>
-        <section class="preview-panel" aria-live="polite"><div class="preview-top"><span>PREVIEW</span><span class="status" id="status"><i></i> Ready to create</span></div><div class="preview-stage empty" id="previewStage"><div class="empty-art"><span class="orbit orbit-one"></span><span class="orbit orbit-two"></span><span class="empty-spark">✦</span></div><h3>Your canvas awaits</h3><p>Your generated video will appear here.</p></div><div class="progress-area" id="progressArea"><div class="progress-label"><span id="progressText">Submitting request...</span><b id="progressValue">0%</b></div><div class="progress-track"><span id="progressBar"></span></div><p id="progressSubtext">Connecting to the generation service</p></div><div class="result-actions" id="resultActions"><div><strong id="resultTitle">Generated video</strong><span id="resultMeta">5 sec · 16:9</span></div><a class="download-btn" id="downloadBtn" download="nova-motion-video.mp4"><span>↓</span> Download</a></div></section>
+        <section class="preview-panel" aria-live="polite"><div class="preview-top"><span>PREVIEW</span><span class="status" id="status"><i></i> Ready to create</span></div><div class="preview-stage" id="previewStage"><div class="empty-state"><div class="empty-icon">✦</div><h3>Your video will appear here</h3><p>No placeholder media is used.</p></div></div><div class="progress-area" id="progressArea" hidden><div class="progress-label"><span id="progressMessage">Preparing…</span><span id="progressValue">0%</span></div><div class="progress-track"><div id="progressBar"></div></div></div><div class="error-box" id="errorBox" hidden></div></section>
       </section>
-      <footer><span>Nova Motion <b>•</b> Made for creators</span><span>Video generation is handled securely by the backend</span></footer>
+      <footer><span>Nova Motion <b>•</b> Open video generation</span><span>Unavailable hardware is shown honestly</span></footer>
     </main>
   </div><script src="script.js"></script>
 </body>
