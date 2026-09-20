@@ -1,42 +1,33 @@
 # Nova Motion
 
-Standalone text-to-video and image-to-video interface backed by Replicate. The frontend never receives a provider API key. The backend creates and polls Replicate predictions, then proxies the completed video to the browser for preview and download.
+Nova Motion uses the Runway Dev API for real text-to-video and image-to-video generation. The browser sends generation inputs only to this backend. `RUNWAYML_API_SECRET` is never sent to the frontend.
 
 ## Exact setup
 
 1. Install Node.js 18+ (Node 20+ recommended).
-2. Create a Replicate account and API token at <https://replicate.com/account/api-tokens>.
-3. Clone this repository and install dependencies:
+2. Create a Runway API key in your Runway developer account.
+3. From the repository root, install dependencies and create the local environment file:
 
 ```bash
 npm install
-```
-
-4. Create a server-only environment file in the repository root:
-
-```bash
 cp .env.example .env
 ```
 
-5. Edit `.env` and set these variables:
+4. Edit `.env`:
 
 ```env
-REPLICATE_API_TOKEN=r8_your_private_token
-REPLICATE_MODEL=wan-video/wan-2.6-t2v
-REPLICATE_IMAGE_MODEL=
-REPLICATE_IMAGE_INPUT_KEY=image
-VIDEO_JOB_TIMEOUT=10m
+RUNWAYML_API_SECRET=your_private_runway_secret
+RUNWAY_MODEL=gen4_turbo
+RUNWAY_API_VERSION=2024-11-06
 PORT=3000
 ```
 
-- `REPLICATE_API_TOKEN` is required and must stay server-side. Do not prefix it with `VITE_`, `NEXT_PUBLIC_`, or put it in `script.js`.
-- `REPLICATE_MODEL` is required. It must be a Replicate model slug whose current schema accepts `prompt`, numeric `duration`, and `size` inputs. The example model is a starting point; verify its current schema before production use.
-- `REPLICATE_IMAGE_MODEL` is optional. Set it to a separate Replicate model slug if image-to-video needs a different model. If blank, the text model is used for both modes.
-- `REPLICATE_IMAGE_INPUT_KEY` defaults to `image`. Change it only when the selected model names its image input differently.
-- `VIDEO_JOB_TIMEOUT` is sent to Replicate as the maximum prediction lifetime.
-- `PORT` is the local backend port.
+- `RUNWAYML_API_SECRET` is required. Keep it in the server environment only. Never place it in `script.js`, HTML, or a public frontend variable.
+- `RUNWAY_MODEL` defaults to `gen4_turbo`. Use a Runway model available to your account that supports the selected endpoint and the requested duration/ratios.
+- `RUNWAY_API_VERSION` controls the `X-Runway-Version` request header and defaults to `2024-11-06`.
+- `PORT` is the local server port.
 
-6. Start the server:
+5. Start Nova Motion:
 
 ```bash
 npm start
@@ -44,14 +35,14 @@ npm start
 
 Open <http://localhost:3000>.
 
-## API flow
+## Integration flow
 
-- `POST /api/videos` validates the prompt, duration, ratio, and optional image, then creates a real Replicate prediction with the server-side token.
-- `GET /api/videos/:id` polls Replicate and maps provider states to the frontend progress screen.
-- `GET /api/videos/:id/file` streams the completed provider output through the backend, so the frontend does not need a provider URL or credential.
+- `POST /api/videos` validates the request, chooses Runway `text_to_video` or `image_to_video`, and creates a real Runway task using the backend secret.
+- `GET /api/videos/:id` polls `GET /v1/tasks/:taskId` and maps Runway task status to the existing UI progress state.
+- `GET /api/videos/:id/file` streams the completed Runway output through the backend for preview and download.
 
-The UI supports 5 and 10 seconds and maps aspect ratios to `1280*720`, `720*1280`, and `720*720`. Exact duration and aspect-ratio support remains model-dependent; choose a Replicate model that supports all requested values or adapt `createPrediction()` in `server.js` to that model's schema.
+The UI's 5 and 10 second options are sent as numeric durations. Aspect ratios are mapped to Runway pixel ratios: 16:9 → `1280:720`, 9:16 → `720:1280`, and 1:1 → `720:720`. Verify that the selected Runway model supports all requested values; provider capabilities can vary by model and account.
 
-## Deployment
+## Production notes
 
-Set the same environment variables as encrypted server-side secrets in your hosting provider. Do not commit `.env`. Add authentication, rate limiting, durable job storage, and provider webhooks before exposing this endpoint publicly; the in-memory job map is intentionally simple and is not restart-safe.
+Set `RUNWAYML_API_SECRET` as an encrypted secret in your hosting provider rather than committing `.env`. Before public launch, add authentication, rate limiting, durable job storage, request cleanup, and a webhook strategy if supported by the selected Runway API plan. The in-memory job map is suitable for a single-process starter deployment but is not restart-safe.
