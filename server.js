@@ -2,229 +2,117 @@ import 'dotenv/config';
 import express from 'express';
 import multer from 'multer';
 import crypto from 'node:crypto';
+import { Client } from '@gradio/client';
 
 const app = express();
 const port = Number(process.env.PORT || 3000);
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 const jobs = new Map();
-const RUNWAY_API_BASE = 'https://api.dev.runwayml.com/v1';
-const RUNWAY_API_VERSION = process.env.RUNWAY_API_VERSION || '2024-11-06';
-const DEFAULT_MODEL = 'gen4.5';
-const RUNWAY_MODEL = process.env.RUNWAY_MODEL || DEFAULT_MODEL;
-const JOB_TIMEOUT_MS = Number(process.env.RUNWAY_JOB_TIMEOUT_MS || 15 * 60 * 1000);
-const supportedTenSecondModels = new Set((process.env.RUNWAY_10S_MODELS || 'gen4.5,gen4_turbo,veo3,veo3.1,veo3.1_fast,seedance-2.5').split(',').map(v => v.trim().toLowerCase()).filter(Boolean));
-const ratioValues = {
-  '16:9': '1280:720',
-  '9:16': '720:1280',
-  '1:1': '720:720'
-};
+const HF_SPACE_ID = process.env.HF_SPACE_ID || 'ZeroGPU/LTX-Video-1.3B';
+const HF_SPACE_API_NAME = process.env.HF_SPACE_API_NAME || '/generate';
+const JOB_TIMEOUT_MS = Number(process.env.HF_SPACE_TIMEOUT_MS || 15 * 60 * 1000);
 
 app.use(express.static('.'));
 
-function supportsDuration(model, duration) {
-  if (duration === 5) return true;
-  if (duration === 10) return supportedTenSecondModels.has(String(model).toLowerCase());
-  return false;
+function providerError(error) {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'string') return error;
+  try { return JSON.stringify(error); } catch { return 'Hugging Face generation failed.'; }
 }
 
-function modelWarning(model) {
-  const validModels = ['gen4.5', 'gen4_turbo', 'veo3', 'veo3.1', 'veo3.1_fast', 'seedance-2.5'];
-  if (!validModels.includes(String(model).toLowerCase())) {
-    return `Invalid Runway model '${model}'. Use one of: ${validModels.join(', ')}`;
+function extractVideoUrl(value) {
+  if (!value) return null;
+  if (typeof value === 'string' && /^https?:\/\//i.test(value)) return value;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = extractVideoUrl(item);
+      if (found) return found;
+    }
+  }
+  if (typeof value === 'object') {
+    return extractVideoUrl(value.url) || extractVideoUrl(value.video) || extractVideoUrl(value.data) || extractVideoUrl(value.path);
   }
   return null;
 }
 
-function getHeaders() {
-  return {
-    Authorization: `Bearer ${process.env.RUNWAYML_API_SECRET}`,
-    'X-Runway-Version': RUNWAY_API_VERSION,
-    'Content-Type': 'application/json'
-  };
+async function connectSpace() {
+  const options = process.env.HF_TOKEN ? { hf_token: process.env.HF_TOKEN } : undefined;
+  return Client.connect(HF_SPACE_ID, options);
 }
 
-function imageDataUrl(file) {
-  return `data:${file.mimetype};base64,${file.buffer.toString('base64')}`;
-}
-
-function extractOutputUrl(output) {
-  if (Array.isArray(output)) return output.find(value => typeof value === 'string') || null;
-  if (typeof output === 'string') return output;
-  if (output && typeof output === 'object') {
-    return output.url || output.video_url || output.videoUrl || null;
+async function generateVideo(job, promptText) {
+  try {
+    job.status = 'processing';
+    job.message = `Running ${HF_SPACE_ID} on free Hugging Face hardware.`;
+    const client = await connectSpace();
+    const result = await client.predict(HF_SPACE_API_NAME, [promptText]);
+    const videoUrl = extractVideoUrl(result?.data ?? result);
+    if (!videoUrl) {
+      throw new Error(`The Hugging Face Space completed without returning a video URL. Raw response: ${JSON.stringify(result?.data ?? result)}`);
+    }
+    job.status = 'completed';
+    job.progress = 100;
+    job.videoUrl = videoUrl;
+    job.message = 'Your real generated video is ready.';
+  } catch (error) {
+    job.status = 'failed';
+    job.error = providerError(error);
+    job.message = job.error;
+    console.error('Hugging Face generation failed:', job.error);
   }
-  return null;
 }
 
-function handleProviderError(payload, status) {
-  const error = payload?.error;
-  const messageFromPayload = error?.message || payload?.message || payload?.detail || (typeof error === 'string' ? error : 'Runway request failed.');
-  const normalized = String(messageFromPayload || '').toLowerCase();
-
-  if (status === 401) return 'Runway API key is missing, invalid, or unauthorized.';
-  if (status === 403 || normalized.includes('credit') || normalized.includes('quota') || normalized.includes('balance')) return 'Runway account has insufficient credits or is not permitted to use this model.';
-  if (status === 404) return 'Runway model or task endpoint was not found. Check RUNWAY_MODEL and your Runway account access.';
-  if (status === 429) return 'Runway rate limit reached. Please wait and try again.';
-  if (status >= 500) return 'Runway is temporarily unavailable. Please try again later.';
-  return messageFromPayload || `Runway request failed (${status}).`;
-}
-
-async function runwayRequest(path, options = {}) {
-  const response = await fetch(`${RUNWAY_API_BASE}${path}`, {
-    ...options,
-    headers: { ...getHeaders(), ...(options.headers || {}) }
-  });
-
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const error = new Error(handleProviderError(payload, response.status));
-    error.status = response.status;
-    throw error;
+app.get('/api/capabilities', async (_req, res) => {
+  try {
+    const client = await connectSpace();
+    return res.json({
+      available: true,
+      provider: 'Hugging Face Space',
+      space: HF_SPACE_ID,
+      apiName: HF_SPACE_API_NAME,
+      model: 'latent-consistency/LTX-video-1.3B-distilled',
+      textToVideo: true,
+      imageToVideo: false,
+      note: 'Availability depends on the Space being awake and free hardware being allocated.'
+    });
+  } catch (error) {
+    return res.status(503).json({
+      available: false,
+      provider: 'Hugging Face Space',
+      space: HF_SPACE_ID,
+      error: providerError(error),
+      message: 'Free Hugging Face hardware or the configured Space is unavailable.'
+    });
   }
-
-  return payload;
-}
+});
 
 app.post('/api/generate', upload.single('image'), async (req, res) => {
   const promptText = String(req.body.prompt || '').trim();
-  const duration = Number(req.body.duration);
-  const aspectRatio = String(req.body.aspectRatio || '');
-  const modelWarningMessage = modelWarning(RUNWAY_MODEL);
-
-  if (!process.env.RUNWAYML_API_SECRET) {
-    return res.status(503).json({ error: 'RUNWAYML_API_SECRET is missing. Add it to the backend environment only.' });
-  }
-
-  if (modelWarningMessage) {
-    return res.status(400).json({ error: modelWarningMessage });
-  }
-
   if (!promptText || promptText.length > 500) {
     return res.status(400).json({ error: 'Prompt is required and must be 500 characters or fewer.' });
   }
-
-  if (!Number.isFinite(duration) || !supportsDuration(RUNWAY_MODEL, duration)) {
-    return res.status(400).json({ error: `Unsupported duration ${duration}. This model supports 5 seconds and, when enabled, 10 seconds.` });
-  }
-
-  if (!ratioValues[aspectRatio]) {
-    return res.status(400).json({ error: 'Aspect ratio must be 16:9, 9:16, or 1:1.' });
-  }
-
-  if (req.file && !req.file.mimetype.startsWith('image/')) {
-    return res.status(400).json({ error: 'The uploaded start frame must be an image file.' });
-  }
-
-  const payload = {
-    model: RUNWAY_MODEL,
-    promptText,
-    ratio: ratioValues[aspectRatio],
-    duration
-  };
-
-  const endpoint = req.file ? '/image_to_video' : '/text_to_video';
-
   if (req.file) {
-    payload.promptImage = imageDataUrl(req.file);
+    return res.status(400).json({ error: 'Image-to-video is unavailable with the selected free LTX Space. No image was sent to a substitute provider.' });
   }
 
-  try {
-    const task = await runwayRequest(endpoint, {
-      method: 'POST',
-      body: JSON.stringify(payload)
-    });
-
-    if (!task || !task.id) {
-      return res.status(502).json({ error: 'Runway did not return a valid task ID.' });
-    }
-
-    const id = crypto.randomUUID();
-    jobs.set(id, {
-      id,
-      taskId: task.id,
-      status: task.status || 'PENDING',
-      progress: 5,
-      output: null,
-      error: null,
-      createdAt: Date.now()
-    });
-
-    return res.status(202).json({ id, status: 'processing' });
-  } catch (error) {
-    console.error('Runway task creation failed:', error);
-    return res.status(error.status || 502).json({ error: error.message || 'Runway rejected the generation request.' });
-  }
+  const id = crypto.randomUUID();
+  const job = { id, status: 'queued', progress: 5, videoUrl: null, error: null, message: 'Waiting for free Hugging Face hardware.', createdAt: Date.now() };
+  jobs.set(id, job);
+  void generateVideo(job, promptText);
+  return res.status(202).json({ id, status: 'processing', message: job.message });
 });
 
-app.get('/api/generate/:id', async (req, res) => {
+app.get('/api/generate/:id', (req, res) => {
   const job = jobs.get(req.params.id);
-  if (!job) {
-    return res.status(404).json({ error: 'Generation job not found or the server restarted.' });
+  if (!job) return res.status(404).json({ error: 'Generation job not found or the server restarted.' });
+  if (!['completed', 'failed'].includes(job.status) && Date.now() - job.createdAt > JOB_TIMEOUT_MS) {
+    job.status = 'failed';
+    job.error = 'Free Hugging Face hardware did not complete the generation before the timeout.';
+    job.message = job.error;
   }
-
-  if (!['SUCCEEDED', 'FAILED', 'CANCELED'].includes(job.status)) {
-    if (Date.now() - job.createdAt > JOB_TIMEOUT_MS) {
-      job.status = 'FAILED';
-      job.error = 'Video generation timed out. Please try again.';
-      jobs.set(job.id, job);
-    } else {
-      try {
-        const task = await runwayRequest(`/tasks/${encodeURIComponent(job.taskId)}`, { method: 'GET' });
-        job.status = task.status || job.status;
-        job.output = extractOutputUrl(task.output);
-        job.error = task.failure?.message || task.failure || task.error?.message || task.error || null;
-        job.progress = task.status === 'SUCCEEDED' ? 100 : Math.min(95, Math.max(job.progress + 3, Number(task.progress) || 0));
-        jobs.set(job.id, job);
-      } catch (error) {
-        console.error('Runway task polling failed:', error);
-        return res.status(502).json({ error: error.message || 'Could not check Runway task status.' });
-      }
-    }
-  }
-
-  const completed = job.status === 'SUCCEEDED';
-  const failed = job.status === 'FAILED' || job.status === 'CANCELED';
-
-  return res.json({
-    id: job.id,
-    status: completed ? 'completed' : failed ? 'failed' : 'processing',
-    progress: job.progress,
-    videoUrl: completed ? job.output : null,
-    error: failed ? (job.error || 'Runway could not generate this video.') : null,
-    message: completed ? 'Your video is ready.' : failed ? job.error || 'Generation failed.' : 'Runway is rendering your video securely.'
-  });
-});
-
-app.get('/api/generate/:id/video', async (req, res) => {
-  const job = jobs.get(req.params.id);
-  if (!job?.output) {
-    return res.status(404).json({ error: 'Video output is not ready.' });
-  }
-
-  try {
-    const upstream = await fetch(job.output);
-    if (!upstream.ok || !upstream.body) {
-      return res.status(502).json({ error: 'Runway output is temporarily unavailable.' });
-    }
-
-    res.setHeader('Content-Type', upstream.headers.get('content-type') || 'video/mp4');
-    res.setHeader('Content-Disposition', 'inline; filename="nova-motion-video.mp4"');
-    res.setHeader('Cache-Control', 'private, max-age=3600');
-
-    for await (const chunk of upstream.body) {
-      res.write(Buffer.from(chunk));
-    }
-    res.end();
-  } catch (error) {
-    console.error('Runway output proxy failed:', error);
-    if (!res.headersSent) {
-      return res.status(502).json({ error: 'Could not retrieve the generated video.' });
-    }
-    return res.end();
-  }
+  return res.json({ id: job.id, status: job.status, progress: job.status === 'completed' ? 100 : job.progress, videoUrl: job.status === 'completed' ? job.videoUrl : null, error: job.status === 'failed' ? job.error : null, message: job.message });
 });
 
 app.listen(port, () => {
-  console.log(`Nova Motion listening on http://localhost:${port}`);
+  console.log(`Nova Motion listening on port ${port}`);
 });
-

@@ -1,83 +1,56 @@
 # Nova Motion
 
-Nova Motion uses the Runway Dev API for real text-to-video and image-to-video generation. The browser sends inputs to the backend; `RUNWAYML_API_SECRET` is never sent to frontend code.
+Nova Motion is a real video-generation UI backed by an open model in a Hugging Face Space. Runway and all paid video APIs have been removed. The app never uses fake or demo video URLs.
 
-## Deploy with a Node.js host
+## Current free model and deployment
 
-Nova Motion is a single Node.js service: Express serves the existing frontend and handles the backend Runway integration. The frontend uses same-origin `/api/...` routes, so no production backend URL needs to be hard-coded.
+The default provider is the public Hugging Face Space `ZeroGPU/LTX-Video-1.3B`, using the open `latent-consistency/LTX-video-1.3B-distilled` model through the Gradio client. It is selected because it supports text-to-video and is much more practical for a free shared GPU Space than larger video models.
 
-### Environment variables
+This is a zero-cost, best-effort deployment, not guaranteed compute. Hugging Face free Spaces can sleep, queue, time out, or reject work when free hardware/quota is unavailable. Nova Motion reports those provider errors instead of creating a placeholder video. The model is text-to-video only in this integration; image-to-video is deliberately rejected rather than silently substituted.
 
-Copy the variable names from `.env.example` into your hosting provider's **server/runtime environment variables**. Set the secret value only in the provider dashboard or secret manager:
+The existing Nova Motion frontend remains in place and calls the same-origin Node backend. The backend connects to the Space, waits for the real generation result, and returns its real video URL.
+
+## Environment
+
+Copy `.env.example` to `.env` for local use:
 
 ```env
-RUNWAYML_API_SECRET=your_private_runway_secret
-RUNWAY_MODEL=gen4.5
-RUNWAY_API_VERSION=2024-11-06
-RUNWAY_JOB_TIMEOUT_MS=900000
-RUNWAY_10S_MODELS=gen4.5,gen4_turbo,veo3,veo3.1,veo3.1_fast,seedance-2.5
+HF_SPACE_ID=ZeroGPU/LTX-Video-1.3B
+HF_SPACE_API_NAME=/generate
+HF_SPACE_TIMEOUT_MS=900000
+PORT=3000
 ```
 
-`RUNWAYML_API_SECRET` must contain the real Runway API secret, but it must never be committed to Git, placed in frontend JavaScript/HTML, or configured as a client-exposed/public environment variable. Leave the value blank in `.env.example`.
+`HF_TOKEN` is optional and must be configured only as a server-side environment variable if the selected Space requires authentication. Do not put it in browser code. No paid API, Runway secret, credit card, or paid Hugging Face hardware is required by the application.
 
-The service listens on the port supplied by the host through `process.env.PORT`. Do not hard-code a production port.
+`HF_SPACE_API_NAME` must match the actual generation endpoint exposed by the selected Space. If the Space changes its endpoint or is unavailable, `/api/capabilities` and generation return the exact connection/provider error.
 
-### Simplest deployment
-
-1. Create a service from this GitHub repository on a Node.js hosting provider such as Render, Railway, or Fly.io.
-2. Use the build command `npm install` (or the provider's automatic Node.js install).
-3. Use the start command `npm start` or `npm run start:production`.
-4. Add `RUNWAYML_API_SECRET` as a server-side environment variable, and add the optional variables above if you want to override their defaults.
-5. Deploy and open the HTTPS URL supplied by the host. The existing frontend and `/api/generate` endpoints are served by the same service.
-
-Do not deploy this as a static-only site: the Node.js service must remain running because it holds the Runway secret and proxies generation/polling requests.
-
-## Local setup
-
-Create a local `.env` file in the project root. Never commit it:
+## Run locally
 
 ```bash
-cp .env.example .env
-# Edit .env and set RUNWAYML_API_SECRET to your real secret.
 npm install
+cp .env.example .env
 npm start
 ```
 
-Open the local URL printed by the server. In production, use the HTTPS URL provided by your host; the frontend continues to call the same-origin backend automatically.
+Open `http://localhost:3000`. Check provider availability at `GET /api/capabilities` before generating.
 
-## Test one real generation
+## Free Hugging Face deployment
 
-Text-to-video test:
+The simplest no-cost setup is:
 
-```bash
-curl -i -X POST http://localhost:3000/api/generate \
-  -F 'prompt=A cinematic sunrise over a quiet mountain lake' \
-  -F 'duration=5' \
-  -F 'aspectRatio=16:9'
-```
+1. Create a free public Hugging Face Space for the UI/backend, or run this Node service on a free Node host.
+2. Configure `HF_SPACE_ID=ZeroGPU/LTX-Video-1.3B` and `HF_SPACE_API_NAME=/generate` as server variables.
+3. Use `npm install` as the build command and `npm start` as the start command.
+4. Do not add a paid provider, Runway key, or client-side token.
 
-This returns a JSON response with an `id`. Poll it:
+For a fully self-contained Hugging Face Space, the same Space should expose the model and a Gradio endpoint named `/generate`; otherwise point `HF_SPACE_ID` at a compatible public Space. Free hardware availability is not guaranteed. A genuine video is returned only when the model actually completes.
 
-```bash
-curl http://localhost:3000/api/generate/YOUR_JOB_ID
-```
+## API flow
 
-When `status` is `completed`, the response includes the real `videoUrl` from Runway. The Nova Motion UI displays the generated output; it does not use fake or demo video URLs.
+- `GET /api/capabilities` checks whether the configured Space can be reached.
+- `POST /api/generate` accepts a prompt and creates an in-memory job.
+- `GET /api/generate/:id` polls that job until `completed` or `failed`.
+- `image` uploads return an explicit unsupported error because the selected free model integration is text-only.
 
-Image-to-video test:
-
-```bash
-curl -i -X POST http://localhost:3000/api/generate \
-  -F 'prompt=Slow cinematic camera movement through the scene' \
-  -F 'duration=5' \
-  -F 'aspectRatio=9:16' \
-  -F 'image=@/absolute/path/to/your/image.jpg'
-```
-
-## Security and error handling
-
-- Never commit `.env` or any real API secret.
-- Never put the API key in `script.js`, HTML, or public frontend code.
-- The backend sends the secret to Runway only from the server environment.
-- Runway failures are returned as errors; the UI must not substitute a fake video.
-- If the selected Runway model does not support a requested duration, the backend returns a clear validation error.
+Failures such as sleeping Space, missing free hardware, quota exhaustion, model load errors, endpoint mismatch, and inference errors are displayed as real errors. No fake video is ever returned.
