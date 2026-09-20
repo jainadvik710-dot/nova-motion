@@ -1,73 +1,82 @@
 # Nova Motion
 
-Nova Motion uses the Runway Dev API for real text-to-video and image-to-video generation. The browser sends inputs to the backend; `RUNWAYML_API_SECRET` is never sent to frontend code.
+Nova Motion uses the current Runway Dev API for real text-to-video and image-to-video generation. The browser sends inputs to the backend; `RUNWAYML_API_SECRET` is never sent to frontend code.
 
-## Run locally
+## Required environment variables
 
-```bash
-npm install
-cp .env.example .env
-```
-
-Set these variables in the root `.env` file:
+Create a local `.env` file in the project root and set:
 
 ```env
 RUNWAYML_API_SECRET=your_private_runway_secret
 RUNWAY_MODEL=gen4.5
 RUNWAY_API_VERSION=2024-11-06
 RUNWAY_JOB_TIMEOUT_MS=900000
+RUNWAY_10S_MODELS=gen4.5,gen4_turbo,veo3,veo3.1,veo3.1_fast,seedance-2.5
 PORT=3000
 ```
 
-`RUNWAYML_API_SECRET` is required and must be kept server-side. `RUNWAY_MODEL` defaults to `gen4.5` in the backend and must be a model enabled for your Runway account that supports the selected video endpoint. `RUNWAY_API_VERSION` defaults to `2024-11-06`; `RUNWAY_JOB_TIMEOUT_MS` defaults to 900000 (15 minutes); `PORT` defaults to 3000.
+Notes:
+- `RUNWAYML_API_SECRET` is required and must stay on the backend only.
+- `RUNWAY_MODEL` should be a current Runway model supported by your account.
+- `RUNWAY_10S_MODELS` is optional and controls which models are allowed to accept 10-second requests.
+- `RUNWAY_API_VERSION` must match your Runway API version header.
 
-Start the server:
+## Install and run
 
 ```bash
+npm install
+cp .env.example .env
+# edit .env with your real values
 npm start
 ```
 
-Open http://localhost:3000.
+Open:
 
-## API flow
+```bash
+http://localhost:3000
+```
 
-- `POST /api/generate` validates the request and creates a real Runway task at `/v1/text_to_video` or `/v1/image_to_video`.
-- `GET /api/generate/:id` polls `/v1/tasks/:taskId` until `SUCCEEDED`, `FAILED`, `CANCELED`, or timeout.
-- `GET /api/generate/:id/video` proxies the completed Runway output to the browser for preview and download.
+## Test one real generation
 
-The frontend supports 5 and 10 seconds and maps 16:9 to `1280:720`, 9:16 to `720:1280`, and 1:1 to `720:720`. Runway model capabilities and account access can vary; if your chosen model rejects a value, the UI displays the provider error rather than fabricating a video.
-
-## Test the backend
-
-With the server running, test missing configuration:
+Text-to-video test:
 
 ```bash
 curl -i -X POST http://localhost:3000/api/generate \
-  -F 'prompt=A cinematic sunset over the mountains' \
+  -F 'prompt=A cinematic sunrise over a quiet mountain lake' \
   -F 'duration=5' \
   -F 'aspectRatio=16:9'
 ```
 
-With a valid secret configured, the same command returns HTTP 202 and a JSON job id. Poll it using the returned id:
+This returns a JSON response with an `id`. Poll it:
 
 ```bash
 curl http://localhost:3000/api/generate/YOUR_JOB_ID
 ```
 
-When `status` becomes `completed`, open the returned `videoUrl` or download it:
+When `status` is `completed`, the response includes the real `videoUrl` from Runway:
 
 ```bash
-curl -L http://localhost:3000/api/generate/YOUR_JOB_ID/video -o nova-motion-video.mp4
+curl http://localhost:3000/api/generate/YOUR_JOB_ID
 ```
 
-For image-to-video:
+Download the final video:
+
+```bash
+curl -L "$(curl -s http://localhost:3000/api/generate/YOUR_JOB_ID | python3 -c 'import sys, json; print(json.load(sys.stdin)["videoUrl"])')" -o nova-motion-video.mp4
+```
+
+Image-to-video test:
 
 ```bash
 curl -i -X POST http://localhost:3000/api/generate \
   -F 'prompt=Slow cinematic camera movement through the scene' \
   -F 'duration=5' \
   -F 'aspectRatio=9:16' \
-  -F 'image=@/absolute/path/to/image.jpg'
+  -F 'image=@/absolute/path/to/your/image.jpg'
 ```
 
-Never commit `.env` or place the Runway secret in `script.js`, HTML, or a public frontend variable.
+Important:
+- Never commit `.env`.
+- Never put the API key in `script.js`, HTML, or public frontend code.
+- Do not use fake or demo video URLs.
+- If the selected Runway model does not support 10s, the backend returns a clear validation error.
